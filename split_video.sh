@@ -116,11 +116,15 @@ if [ -f "$DESKTOP/out_000.mp4" ]; then
     # Remove first frame using video filter (requires re-encoding but more reliable)
     # select='gte(n\,1)' skips the first frame (frame 0)
     # setpts resets presentation timestamps
+    # iPhone-compatible settings: yuv420p, faststart, High Profile Level 4.1
     ffmpeg -i "$DESKTOP/out_000.mp4" \
         -vf "select='gte(n\,1)',setpts=PTS-STARTPTS" \
         -af "aselect='gte(n\,1)',asetpts=PTS-STARTPTS" \
         -c:v libx264 -preset fast -crf 18 \
+        -profile:v high -level 4.1 \
+        -pix_fmt yuv420p \
         -c:a aac -b:a 320k \
+        -movflags +faststart \
         "$DESKTOP/out_000_temp.mp4" -y > /dev/null 2>&1
     
     # Replace original with trimmed version
