@@ -1,0 +1,9 @@
+# Output directories created by split_video.sh
+*_segments/
+
+# macOS
+.DS_Store
+
+# Temporary files
+*.tmp
+*.log
