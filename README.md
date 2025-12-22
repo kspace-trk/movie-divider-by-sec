@@ -10,6 +10,5 @@ Desktopの動画ファイルを1分（60秒）ごとに自動分割するシェ�
 ## コマンド
 
 ```bash
-# Desktopにinput.movまたはinput.mp4を配置してから実行
 bash <(curl -s https://raw.githubusercontent.com/kspace-trk/movie-divider-by-sec/main/split_video.sh)
 ```

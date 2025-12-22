@@ -86,17 +86,20 @@ print_info "Splitting video into 1-minute segments..."
 
 # Use ffmpeg to split the video
 # -c copy: copy codec without re-encoding (fast)
-# -map 0: include all streams (video, audio, subtitles)
+# -map 0:v -map 0:a: include only video and audio streams (exclude unsupported data streams)
 # -segment_time 60: split every 60 seconds
 # -f segment: use segment muxer
 # -reset_timestamps 1: reset timestamps for each segment
+# -avoid_negative_ts make_zero: fix timestamp issues that cause black frames
 ffmpeg -i "$INPUT_FILE" \
     -c copy \
-    -map 0 \
+    -map 0:v \
+    -map 0:a \
+    -avoid_negative_ts make_zero \
     -segment_time 60 \
     -f segment \
     -reset_timestamps 1 \
-    "$DESKTOP/out_%03d.mp4" 2>&1 | grep -v "frame=" || true
+    "$DESKTOP/out_%03d.mp4"
 
 # Count generated segments
 SEGMENT_COUNT=$(ls -1 "$DESKTOP"/out_*.mp4 2>/dev/null | wc -l | tr -d ' ')
@@ -104,6 +107,26 @@ SEGMENT_COUNT=$(ls -1 "$DESKTOP"/out_*.mp4 2>/dev/null | wc -l | tr -d ' ')
 if [ "$SEGMENT_COUNT" -eq 0 ]; then
     print_error "No output files were created"
     exit 1
+fi
+
+# Fix first segment by removing the first frame (if it exists)
+if [ -f "$DESKTOP/out_000.mp4" ]; then
+    print_info "Fixing first frame of out_000.mp4..."
+    
+    # Remove first frame using video filter (requires re-encoding but more reliable)
+    # select='gte(n\,1)' skips the first frame (frame 0)
+    # setpts resets presentation timestamps
+    ffmpeg -i "$DESKTOP/out_000.mp4" \
+        -vf "select='gte(n\,1)',setpts=PTS-STARTPTS" \
+        -af "aselect='gte(n\,1)',asetpts=PTS-STARTPTS" \
+        -c:v libx264 -preset fast -crf 18 \
+        -c:a aac -b:a 320k \
+        "$DESKTOP/out_000_temp.mp4" -y > /dev/null 2>&1
+    
+    # Replace original with trimmed version
+    mv "$DESKTOP/out_000_temp.mp4" "$DESKTOP/out_000.mp4"
+    
+    print_info "First frame removed from out_000.mp4"
 fi
 
 print_info "Successfully created $SEGMENT_COUNT segments on Desktop"
