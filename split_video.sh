@@ -1,7 +1,8 @@
 #!/bin/bash
 
 # Video Splitter - Split videos into 1-minute segments
-# Auto-detects input.mov or input.mp4 from ~/Desktop
+# Uses the file path given as the first argument (.mov or .mp4) if provided,
+# otherwise auto-detects input.mov or input.mp4 from ~/Desktop
 # Outputs split segments as out_000.mp4, out_001.mp4, etc. to ~/Desktop
 
 set -e
@@ -36,11 +37,28 @@ if ! command -v ffmpeg &> /dev/null; then
     exit 1
 fi
 
-# Auto-detect input file from ~/Desktop
+# Use the file path given as an argument, or auto-detect input file from ~/Desktop
 DESKTOP="$HOME/Desktop"
 INPUT_FILE=""
 
-if [ -f "$DESKTOP/input.mov" ]; then
+if [ -n "$1" ]; then
+    if [ ! -f "$1" ]; then
+        print_error "Input file not found: $1"
+        exit 1
+    fi
+    case "$1" in
+        *.[mM][oO][vV]|*.[mM][pP]4)
+            INPUT_FILE="$1"
+            print_info "Using input file: $INPUT_FILE"
+            ;;
+        *)
+            print_error "Unsupported file type: $1"
+            echo ""
+            echo "Supported file types: .mov, .mp4"
+            exit 1
+            ;;
+    esac
+elif [ -f "$DESKTOP/input.mov" ]; then
     INPUT_FILE="$DESKTOP/input.mov"
     print_info "Found input file: input.mov"
 elif [ -f "$DESKTOP/input.mp4" ]; then
