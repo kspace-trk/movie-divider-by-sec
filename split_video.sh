@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Video Splitter - Split videos into 1-minute segments
+# Video Splitter - Split videos into segments that never exceed 1 minute
 # Uses the file path given as the first argument (.mov or .mp4) if provided,
 # otherwise auto-detects input.mov or input.mp4 from ~/Desktop
 # Outputs split segments as out_000.mp4, out_001.mp4, etc. to ~/Desktop
@@ -95,29 +95,84 @@ if [ "$DURATION_INT" -lt 60 ]; then
     exit 0
 fi
 
-# Calculate number of segments
-NUM_SEGMENTS=$(echo "($DURATION_INT + 59) / 60" | bc)
-print_info "Expected number of segments: $NUM_SEGMENTS"
+# Maximum length of each segment in seconds
+# (kept slightly below 60 so that no segment ever exceeds 1 minute)
+MAX_SEGMENT_SEC=59.5
 
-# Split video into 1-minute (60 seconds) segments
-print_info "Splitting video into 1-minute segments..."
+# Without re-encoding, a video can only be cut at keyframes.
+# Pick the latest keyframe within MAX_SEGMENT_SEC of each segment start as the cut point.
+# Prints "NG" if keyframes are too sparse to keep every segment within the limit.
+START_TIME=$(ffprobe -v error -show_entries format=start_time -of default=noprint_wrappers=1:nokey=1 "$INPUT_FILE")
+CUT_TIMES=$(ffprobe -v error -select_streams v:0 -show_entries packet=pts_time,flags -of csv=p=0 "$INPUT_FILE" \
+    | awk -F, '$2 ~ /K/ { print $1 }' \
+    | sort -n -u \
+    | awk -v max="$MAX_SEGMENT_SEC" -v dur="$DURATION" -v offset="${START_TIME:-0}" '
+        function cut() {
+            if (prev <= start) { ng = 1; return }
+            # Cut slightly before the keyframe so the segment muxer splits exactly at it
+            cuts = cuts (cuts == "" ? "" : ",") sprintf("%.6f", prev - 0.001)
+            start = prev
+        }
+        {
+            t = $1 - offset
+            if (t - start > max) {
+                cut()
+                if (t - start > max) ng = 1
+            }
+            prev = t
+        }
+        END {
+            if (dur - start > max) {
+                cut()
+                if (dur - start > max) ng = 1
+            }
+            print (ng ? "NG" : cuts)
+        }')
 
-# Use ffmpeg to split the video
-# -c copy: copy codec without re-encoding (fast)
-# -map 0:v -map 0:a: include only video and audio streams (exclude unsupported data streams)
-# -segment_time 60: split every 60 seconds
-# -f segment: use segment muxer
-# -reset_timestamps 1: reset timestamps for each segment
-# -avoid_negative_ts make_zero: fix timestamp issues that cause black frames
-ffmpeg -i "$INPUT_FILE" \
-    -c copy \
-    -map 0:v \
-    -map 0:a \
-    -avoid_negative_ts make_zero \
-    -segment_time 60 \
-    -f segment \
-    -reset_timestamps 1 \
-    "$DESKTOP/out_%03d.mp4"
+if [ "$CUT_TIMES" != "NG" ] && [ -n "$CUT_TIMES" ]; then
+    NUM_SEGMENTS=$(( $(echo "$CUT_TIMES" | tr -cd ',' | wc -c) + 2 ))
+    print_info "Expected number of segments: $NUM_SEGMENTS"
+    print_info "Splitting video into segments of up to ${MAX_SEGMENT_SEC} seconds..."
+
+    # Use ffmpeg to split the video
+    # -c copy: copy codec without re-encoding (fast)
+    # -map 0:v -map 0:a: include only video and audio streams (exclude unsupported data streams)
+    # -segment_times: split at the keyframes chosen above
+    # -f segment: use segment muxer
+    # -reset_timestamps 1: reset timestamps for each segment
+    # -avoid_negative_ts make_zero: fix timestamp issues that cause black frames
+    ffmpeg -i "$INPUT_FILE" \
+        -c copy \
+        -map 0:v \
+        -map 0:a \
+        -avoid_negative_ts make_zero \
+        -segment_times "$CUT_TIMES" \
+        -f segment \
+        -reset_timestamps 1 \
+        "$DESKTOP/out_%03d.mp4"
+else
+    print_warning "Keyframes are too sparse to split within ${MAX_SEGMENT_SEC} seconds without re-encoding"
+    print_info "Re-encoding while splitting (this may take a while)..."
+
+    # Re-encode with a forced keyframe every MAX_SEGMENT_SEC seconds and split there
+    # iPhone-compatible settings: yuv420p, faststart, High Profile Level 4.1
+    # -segment_time_delta: tolerate the small timestamp shift of the forced keyframes
+    #   (without it the split slips to the next keyframe)
+    ffmpeg -i "$INPUT_FILE" \
+        -map 0:v \
+        -map 0:a \
+        -c:v libx264 -preset fast -crf 18 \
+        -profile:v high -level 4.1 \
+        -pix_fmt yuv420p \
+        -force_key_frames "expr:gte(t,n_forced*${MAX_SEGMENT_SEC})" \
+        -c:a aac -b:a 320k \
+        -segment_time "$MAX_SEGMENT_SEC" \
+        -segment_time_delta 0.05 \
+        -f segment \
+        -segment_format_options movflags=+faststart \
+        -reset_timestamps 1 \
+        "$DESKTOP/out_%03d.mp4"
+fi
 
 # Count generated segments
 SEGMENT_COUNT=$(ls -1 "$DESKTOP"/out_*.mp4 2>/dev/null | wc -l | tr -d ' ')
